@@ -9,8 +9,14 @@ const libs = require('../../lib');
 const middlewares = require('../../middlewares');
 const config = require('../../config/configVars');
 
+const services = require("../../services");
+// const user = require("../../models/user");
+const { userService } = require("../../services")
+
+
 router.post('/login', async (req, res) => {
     try {
+        // console.log("1. Old login")
         const {email, password, rememberMe} = req.body;
         if ( !email || !password ) {
             return res.status(400).json({error: `Invalid Payload email and password required.`});
@@ -18,6 +24,32 @@ router.post('/login', async (req, res) => {
         if ( !libs.regex.email.test(email) ) {
             return res.status(400).json({error: `Email is not valid.`});
         }
+
+        const user = await userService.getSingleUserFromDb(null, `where email='${email}'`);
+        if (!user?.email) {
+            throw new Error(`No user found with this email.`);
+        }
+        
+        const isPasswordValid = await libs.utils.checkIfValidEncryption(user.password, password);
+        if (!isPasswordValid) {
+            throw new Error(`Password is not valid`);
+        }
+
+        const loggedInUsersKey = 'logged_in_users';
+        const userIds = await services.redisService.sessionRedis(
+            'lrange',
+            loggedInUsersKey,
+            0,
+            -1
+        );
+        const isLoggedIn = userIds && userIds.some(id => id.startsWith(`${user.id}:`)); 
+        console.log(`Is user ${user.id} logged in?`, isLoggedIn);
+        if(isLoggedIn) {
+            const emailInstance = emailService.CreateEmailFactory({email: email, Type: libs.constants.emailType.CheckOTP}, user );
+            await emailInstance.sendEmail();
+            throw new Error('OTP sent for verification. Please check your email.');
+        }
+
         const [token, longTermToken] = await controllers.authController.login({email, password, rememberMe});
         if (longTermToken) {
             res.cookie(
@@ -29,6 +61,38 @@ router.post('/login', async (req, res) => {
             )
         }
         res.cookie('jwt', token, configVars.sessionCookieConfig)
+        return res.json({ 'status': 'Success' });
+    } catch (error) {
+        console.log(error);
+        return res.json({error: error?.message});
+    }
+});
+
+router.post('/verify-otp', async (req, res) => {
+    try {
+        const {email, password, otp, rememberMe} = req.body;
+
+        const storedOTP = await services.redisService.redis('get', `${libs.constants.redisKeys.email}:${email}:otp`);
+        if (!storedOTP) {
+            return res.status(400).json({ error: 'OTP has expired or does not exist' });
+        }
+        if (storedOTP !== otp) {
+            return res.status(400).json({ error: 'Invalid OTP' });
+        }
+        await services.redisService.redis('del', `${libs.constants.redisKeys.email}:${email}:otp`);
+
+        const [token, longTermToken] = await controllers.authController.login({email, password, rememberMe});
+        if (longTermToken) {
+            res.cookie(
+                'ljwt', longTermToken, 
+                {
+                    ...configVars.sessionCookieConfig,
+                    maxAge: libs.constants.longTermSessionExpireTime_Seconds * 1000,
+                }
+            )
+        }
+        res.cookie('jwt', token, configVars.sessionCookieConfig)
+        // console.log('Response cookies:', res.get('Set-Cookie'));
         return res.json({ 'status': 'Success' });
     } catch (error) {
         console.log(error);
@@ -168,12 +232,44 @@ router.post('/resetPassword', async (req, res) => {
 
 router.all('/logout', middlewares.session.checkLogin(true), async (req, res) => {
     try {
-        const {sid} = req.session;
+        const {sid, userId} = req.session;
+        if (!sid || !userId) {
+            console.log('Missing session ID or user ID');
+        }
         await libs.utils.deleteSession(sid);
+        const loggedInUsersKey = 'logged_in_users';
+        const loginInstance = `${userId}:${sid}`;
+        await services.redisService.sessionRedis(
+            'lrem',
+            loggedInUsersKey,
+            1, 
+            loginInstance
+        );
         res.clearCookie('jwt', configVars.sessionCookieConfig);
         res.clearCookie('ljwt', {
             ...configVars.sessionCookieConfig,
         })
+        return res.json({msg: `Session logged out`});
+    } catch (error) {
+        return res.json({error: error?.message ?? error});
+    }
+});
+router.all('/browserClose', middlewares.session.checkLogin(true), async (req, res) => {
+    try {
+        const {sid, userId} = req.session;
+        if (!sid || !userId) {
+            console.log('Missing session ID or user ID');
+        }
+        await libs.utils.deleteSession(sid);
+        const loggedInUsersKey = 'logged_in_users';
+        const loginInstance = `${userId}:${sid}`;
+        await services.redisService.sessionRedis(
+            'lrem',
+            loggedInUsersKey,
+            1, 
+            loginInstance
+        );
+        res.clearCookie('jwt', configVars.sessionCookieConfig);
         return res.json({msg: `Session logged out`});
     } catch (error) {
         return res.json({error: error?.message ?? error});

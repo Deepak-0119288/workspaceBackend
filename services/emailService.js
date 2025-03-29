@@ -36,6 +36,10 @@ const popEmailFromEmailQueue = async () => {
     sendEmail(parsedData);
 }
 
+const generateOTP = () => {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
 /**
  * 
  * @param {{[string]: any}} data 
@@ -80,6 +84,20 @@ const CreateEmailFactory = (data, user, session) => {
             if (!user) throw new Error(libs.messages.errorMessage.userDataMissingEmailFactory);
             const emailData = libs.constants.emailContent[data.Type];
             return new EmailClass({data: data, emailData: emailData, user: user});
+        }
+        case libs.constants.emailType.CheckOTP: {
+            const otp = generateOTP();
+            data.otp = otp;
+        
+            redisService.redis('set', 
+                `${libs.constants.redisKeys.email}:${data.to}:otp`, 
+                otp, 
+                'EX', 
+                600
+            );
+
+            const emailData = libs.constants.emailContent[data.Type];
+            return new EmailClass({data, emailData, user});
         }
         default: {
             throw new Error(libs.messages.errorMessage.invalidEmailType)

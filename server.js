@@ -61,7 +61,6 @@ io.use( async (socket, next) => {
 		const sessionObj = await authController.authenticateSession(cookies?.jwt);
 		if ( ! sessionObj )		throw new Error("Request is not authenticated");
 		socket.userData = sessionObj;
-		//console.log("Socket user data = ", userData);
 		next();	
 	} catch (e) {
 		console.log(e)
@@ -71,12 +70,10 @@ io.use( async (socket, next) => {
 })
 
 io.on('connection', (socket) => {
-	//console.log('a user connected');
 	let userId = socket.userData && socket.userData.userId;
 	let socketId = socket.id;
 	socket.join(userId);
 	socket.on('disconnect', () => {
-		//console.log('user disconnected');
 		socket.leave(userId);
 		channelController.setLastSeenOnSocketDisconnection({userId, socketId})
 	});

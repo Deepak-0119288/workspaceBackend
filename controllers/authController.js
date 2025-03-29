@@ -41,12 +41,12 @@ const login = async (payload, byPassPasswordCheck) => {
         throw new Error(libs.messages.errorMessage.userVerificationRequired)
     }
 
-    if (!byPassPasswordCheck) {
-        const isPasswordValid = await libs.utils.checkIfValidEncryption(user.password, password);
-        if (!isPasswordValid) {
-            throw new Error('Password is not valid');
-        }
-    }
+    // if (!byPassPasswordCheck) {
+    //     const isPasswordValid = await libs.utils.checkIfValidEncryption(user.password, password);
+    //     if (!isPasswordValid) {
+    //         throw new Error('Password is not valid');
+    //     }
+    // }
 
     const sessionObj = createSessionObj(user);
     const token = jwt.sign(
@@ -72,6 +72,19 @@ const login = async (payload, byPassPasswordCheck) => {
     await services.redisService.sessionRedis(
         'set',`${libs.constants.sessionPrefix}:${sessionObj.sid}`,
         JSON.stringify(sessionObj), 'EX', libs.constants.sessionExpireTime_Seconds,
+    );
+    
+    const loggedInUsersKey = 'logged_in_users';
+    const loginInstance = `${user.id}:${sessionObj.sid}`;
+    await services.redisService.sessionRedis(
+        'lpush', 
+        loggedInUsersKey,
+        loginInstance
+    );
+    await services.redisService.sessionRedis(
+        'expire',
+        loggedInUsersKey,
+        900 
     );
     return [token, longTermSessionToken];
 }
